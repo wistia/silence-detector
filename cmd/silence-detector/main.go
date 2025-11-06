@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,11 +41,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	if info, err := os.Stat(*inputPath); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to stat input %q: %v\n", *inputPath, err)
+	resolvedInput := strings.TrimSpace(*inputPath)
+	var cleanup func()
+
+	if isRemoteInput(resolvedInput) {
+		downloadedPath, c, err := downloadRemoteInput(resolvedInput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to download input %q: %v\n", resolvedInput, err)
+			os.Exit(1)
+		}
+		resolvedInput = downloadedPath
+		cleanup = c
+	}
+
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	if info, err := os.Stat(resolvedInput); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to stat input %q: %v\n", resolvedInput, err)
 		os.Exit(1)
 	} else if info.IsDir() {
-		fmt.Fprintf(os.Stderr, "input %q is a directory, expected a file\n", *inputPath)
+		fmt.Fprintf(os.Stderr, "input %q is a directory, expected a file\n", resolvedInput)
 		os.Exit(1)
 	}
 
@@ -62,7 +82,7 @@ func main() {
 
 	det := detector.NewDetector(detector.WithFFmpegPath(*ffmpegBinary))
 
-	result, err := det.DetectSilence(ctx, *inputPath, detector.DetectionOptions{
+	result, err := det.DetectSilence(ctx, resolvedInput, detector.DetectionOptions{
 		NoiseLevel:         *noiseLevel,
 		MinSilenceDuration: *minDuration,
 	})
@@ -93,7 +113,7 @@ func emitJSON(result detector.DetectionResult, inputPath string, noiseLevel, min
 		FullySilent *bool                      `json:"fully_silent,omitempty"`
 		Intervals   []detector.SilenceInterval `json:"intervals"`
 	}{
-		Input:     filepath.Clean(inputPath),
+		Input:     displayInputPath(inputPath),
 		NoiseDB:   noiseLevel,
 		MinDur:    minDuration,
 		Duration:  result.InputDuration,
@@ -114,7 +134,7 @@ func emitJSON(result detector.DetectionResult, inputPath string, noiseLevel, min
 }
 
 func emitText(result detector.DetectionResult, inputPath string, noiseLevel, minDuration float64, checkFullSilence bool) {
-	fmt.Printf("Silence detection for %s\n", filepath.Clean(inputPath))
+	fmt.Printf("Silence detection for %s\n", displayInputPath(inputPath))
 	fmt.Printf("Noise threshold: %.2fdB, Minimum duration: %.2fs\n", noiseLevel, minDuration)
 	if result.InputDuration > 0 {
 		fmt.Printf("Input duration: %.3fs\n", result.InputDuration)
@@ -140,4 +160,56 @@ func emitText(result detector.DetectionResult, inputPath string, noiseLevel, min
 			fmt.Println("Entire file is not silent.")
 		}
 	}
+}
+
+func isRemoteInput(path string) bool {
+	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+}
+
+func displayInputPath(path string) string {
+	if isRemoteInput(path) {
+		return path
+	}
+	return filepath.Clean(path)
+}
+
+func downloadRemoteInput(rawURL string) (string, func(), error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", nil, fmt.Errorf("unexpected HTTP status %s", resp.Status)
+	}
+
+	ext := filepath.Ext(parsed.Path)
+	tmpFile, err := os.CreateTemp("", "silence-detector-*"+ext)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", nil, err
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", nil, err
+	}
+
+	cleanup := func() {
+		os.Remove(tmpFile.Name())
+	}
+
+	return tmpFile.Name(), cleanup, nil
 }
