@@ -43,8 +43,7 @@ jobs:
           set -euo pipefail
           input="$DETECTOR_INPUT_RAW"
           if [[ "$input" =~ ^https?:// ]]; then
-            curl -L "$input" -o detector-input.bin
-            echo "path=detector-input.bin" >> "$GITHUB_OUTPUT"
+            echo "path=$input" >> "$GITHUB_OUTPUT"
           elif [[ -f "$input" ]]; then
             echo "path=$input" >> "$GITHUB_OUTPUT"
           else
