@@ -82,4 +82,4 @@ jobs:
             detector-run.log
             detector-output.json
             detector-run.err
-        if-no-files-found: ignore
+          if-no-files-found: ignore
