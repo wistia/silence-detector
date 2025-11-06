@@ -61,14 +61,27 @@ jobs:
 
           echo "Command: ${cmd[*]}" | tee detector-run.log
 
+          set +e
           "${cmd[@]}" 1>detector-output.json 2>detector-run.err
-          cat detector-output.json | tee -a detector-run.log
+          status=$?
+          set -e
+
+          if [[ -f detector-output.json ]]; then
+            cat detector-output.json | tee -a detector-run.log
+          fi
+
           if [[ -s detector-run.err ]]; then
             {
               echo "--- stderr ---"
               cat detector-run.err
             } | tee -a detector-run.log
           fi
+
+          if (( status != 0 )); then
+            echo "Silence detector failed with exit code $status" | tee -a detector-run.log
+            exit "$status"
+          fi
+
           echo "DETECTOR_OUTPUT=detector-output.json" >> "$GITHUB_ENV"
 
       - name: Upload detector artifacts
