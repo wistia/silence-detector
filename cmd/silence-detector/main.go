@@ -41,13 +41,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	resolvedInput := strings.TrimSpace(*inputPath)
+	originalInput := strings.TrimSpace(*inputPath)
+	resolvedInput := originalInput
 	var cleanup func()
 
 	if isRemoteInput(resolvedInput) {
 		downloadedPath, c, err := downloadRemoteInput(resolvedInput)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to download input %q: %v\n", resolvedInput, err)
+			fmt.Fprintf(os.Stderr, "failed to download input %q: %v\n", originalInput, err)
 			os.Exit(1)
 		}
 		resolvedInput = downloadedPath
@@ -59,9 +60,15 @@ func main() {
 	}
 
 	if info, err := os.Stat(resolvedInput); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to stat input %q: %v\n", resolvedInput, err)
+		if cleanup != nil {
+			cleanup()
+		}
+		fmt.Fprintf(os.Stderr, "failed to stat input %q: %v\n", originalInput, err)
 		os.Exit(1)
 	} else if info.IsDir() {
+		if cleanup != nil {
+			cleanup()
+		}
 		fmt.Fprintf(os.Stderr, "input %q is a directory, expected a file\n", resolvedInput)
 		os.Exit(1)
 	}
@@ -163,7 +170,21 @@ func emitText(result detector.DetectionResult, inputPath string, noiseLevel, min
 }
 
 func isRemoteInput(path string) bool {
-	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+	if path == "" {
+		return false
+	}
+
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return false
+	}
+
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
 }
 
 func displayInputPath(path string) string {
