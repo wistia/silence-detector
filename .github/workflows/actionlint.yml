@@ -1,0 +1,189 @@
+name: GitHub Actions Lint
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/**/**.yml'
+      - '.github/**/**.yaml'
+
+permissions: {}
+
+jobs:
+  actionlint:
+    name: actionlint
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        id: install-actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIONLINT_TAG="v1.7.12"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)
+              URL="https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_TAG}/actionlint_${ACTIONLINT_TAG#v}_linux_amd64.tar.gz"
+              SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+              ;;
+            aarch64)
+              URL="https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_TAG}/actionlint_${ACTIONLINT_TAG#v}_linux_arm64.tar.gz"
+              SHA256="325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+              ;;
+            *)
+              echo "Unsupported architecture: $ARCH" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "version=${ACTIONLINT_TAG#v}" >> "$GITHUB_OUTPUT"
+
+          WORKDIR=$(mktemp -d)
+          trap 'rm -rf "$WORKDIR"' EXIT
+
+          curl -fsSL --output "$WORKDIR/actionlint.tar.gz" "$URL"
+          echo "${SHA256}  $WORKDIR/actionlint.tar.gz" | sha256sum --check
+
+          tar -xzf "$WORKDIR/actionlint.tar.gz" -C "$WORKDIR"
+          sudo install -m 755 "$WORKDIR/actionlint" /usr/local/bin/actionlint
+
+      - name: Write actionlint problem matcher
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const matcher = {
+              problemMatcher: [
+                {
+                  owner: "actionlint",
+                  pattern: [
+                    {
+                      regexp: "^(?:\\x1b\\[\\d+m)?(.+?)(?:\\x1b\\[\\d+m)*:(?:\\x1b\\[\\d+m)*(\\d+)(?:\\x1b\\[\\d+m)*:(?:\\x1b\\[\\d+m)*(\\d+)(?:\\x1b\\[\\d+m)*: (?:\\x1b\\[\\d+m)*(.+?)(?:\\x1b\\[\\d+m)* \\[(.+?)\\]$",
+                      file: 1,
+                      line: 2,
+                      column: 3,
+                      message: 4,
+                      code: 5
+                    }
+                  ]
+                }
+              ]
+            };
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/actionlint-matcher.json`, JSON.stringify(matcher, null, 2));
+
+      - name: Run actionlint
+        shell: bash
+        run: |
+          echo "::add-matcher::$RUNNER_TEMP/actionlint-matcher.json"
+          actionlint -shellcheck= -pyflakes= -color
+
+  zizmor:
+    name: zizmor
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        id: install-zizmor
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIZMOR_TAG="v1.23.1"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)
+              URL="https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_TAG}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+              SHA256="67a8df0a14352dd81882e14876653d097b99b0f4f6b6fe798edc0320cff27aff"
+              ;;
+            aarch64)
+              URL="https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_TAG}/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+              SHA256="3725d7cd7102e4d70827186389f7d5930b6878232930d0a3eb058d7e5b47e658"
+              ;;
+            *)
+              echo "Unsupported architecture: $ARCH" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "version=${ZIZMOR_TAG#v}" >> "$GITHUB_OUTPUT"
+
+          WORKDIR=$(mktemp -d)
+          trap 'rm -rf "$WORKDIR"' EXIT
+
+          curl -fsSL --output "$WORKDIR/zizmor.tar.gz" "$URL"
+          echo "${SHA256}  $WORKDIR/zizmor.tar.gz" | sha256sum --check
+
+          tar -xzf "$WORKDIR/zizmor.tar.gz" -C "$WORKDIR"
+          sudo install -m 755 "$WORKDIR/zizmor" /usr/local/bin/zizmor
+
+      - name: Merge zizmor config
+        id: merge-zizmor-config
+        shell: python3 {0}
+        run: |
+          import os
+          import subprocess
+          import sys
+
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'pyyaml', '-q'])
+          import yaml
+
+          workspace = os.environ['GITHUB_WORKSPACE']
+          candidates = [
+            '.github/zizmor.yml',
+            '.github/zizmor.yaml',
+            'zizmor.yml',
+            'zizmor.yaml',
+          ]
+
+          base = {}
+          for rel in candidates:
+            abs_path = os.path.join(workspace, rel)
+            if os.path.exists(abs_path):
+              print(f'Found zizmor config: {rel}')
+              with open(abs_path) as f:
+                base = yaml.safe_load(f) or {}
+              break
+          else:
+            print('No zizmor config found in repo; using caller overrides only')
+
+          rules = base.setdefault('rules', {})
+          rules['secrets-outside-env'] = {**rules.get('secrets-outside-env', {}), 'disable': True}
+
+          out = os.path.join(os.environ['RUNNER_TEMP'], 'zizmor.yml')
+          with open(out, 'w') as f:
+            yaml.safe_dump(base, f, default_flow_style=False)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f'config-path={out}\n')
+
+      - name: Run zizmor
+        shell: bash
+        env:
+          GHA_ZIZMOR_MIN_SEVERITY: medium
+          GHA_ZIZMOR_MIN_CONFIDENCE: medium
+          GHA_ZIZMOR_PATH: '.github/'
+          GHA_ZIZMOR_CONFIG: ${{ steps.merge-zizmor-config.outputs.config-path }}
+        run: |
+          set -euo pipefail
+
+          arguments=(--format=github)
+          arguments+=("--min-severity=${GHA_ZIZMOR_MIN_SEVERITY}")
+          arguments+=("--min-confidence=${GHA_ZIZMOR_MIN_CONFIDENCE}")
+          arguments+=("--config=${GHA_ZIZMOR_CONFIG}")
+
+          read -ra scan_paths <<< "$GHA_ZIZMOR_PATH"
+          zizmor "${arguments[@]}" -- "${scan_paths[@]}"
