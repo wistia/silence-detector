@@ -9,9 +9,15 @@ on:
           analysed when triggering the workflow manually.
         required: true
 
+
+permissions: {}
+
 jobs:
   run-detector:
     name: Manual detector run
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.detector_input != ''
     env:
